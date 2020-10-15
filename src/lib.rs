@@ -1,4 +1,6 @@
 extern crate proc_macro;
+use std::iter::FromIterator;
+
 use heck::CamelCase;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -9,7 +11,10 @@ use syn::{
     parse_macro_input,
     punctuated::Punctuated,
     token::Brace,
-    Error, Expr, ExprLit, ExprPath, Ident, Lit, LitStr, Token,
+    token::Paren,
+    token::Pub,
+    Error, Expr, ExprLit, ExprPath, Field, Fields, FieldsUnnamed, Ident, Lit, LitStr,
+    PathArguments, PathSegment, Token, Type, TypePath, VisPublic, Visibility,
 };
 
 #[derive(Debug)]
@@ -72,10 +77,6 @@ impl Parse for Segment {
 pub fn cli(input: TokenStream) -> TokenStream {
     let cli = parse_macro_input!(input as Cli);
 
-    println!("{:#?}", cli);
-
-    let l = LitStr::new("KEK", Span::call_site());
-
     let e = generate_enum("Command", &cli.paths);
 
     dbg!(quote! {
@@ -86,20 +87,66 @@ pub fn cli(input: TokenStream) -> TokenStream {
     .into()
 }
 
+struct Variant {
+    name: Ident,
+    values: Vec<syn::Path>,
+}
+
 fn generate_enum(name: &str, paths: &Vec<Path>) -> proc_macro2::TokenStream {
     let name = Ident::new(name, Span::call_site());
     let mut variants = vec![];
+    let mut subs = vec![];
     for path in paths {
-        match &path.segments[0] {
-            Segment::Name(name) => {
-                variants.push(Ident::new(&name.value().to_camel_case(), name.span()))
+        for segment in &path.segments {
+            match segment {
+                Segment::Name(name) => variants.push(Variant {
+                    name: Ident::new(&name.value().to_camel_case(), name.span()),
+                    values: vec![],
+                }),
+                Segment::Value(value) => {
+                    variants.last_mut().map(|v| v.values.push(value.clone()));
+                }
+                Segment::Sub(paths) => {
+                    // TODO: propagate the returns properly
+                    variants.last_mut().map(|v| {
+                        v.values.push(syn::Path {
+                            leading_colon: None,
+                            segments: Punctuated::from_iter(vec![PathSegment {
+                                ident: v.name.clone(),
+                                arguments: PathArguments::None,
+                            }]),
+                        })
+                    });
+                    subs.push(generate_enum(
+                        &variants.last().unwrap().name.to_string(),
+                        paths,
+                    ));
+                }
             }
-            _ => (),
         }
     }
+    let variants = variants.iter().map(|variant| syn::Variant {
+        attrs: vec![],
+        ident: variant.name.clone(),
+        fields: Fields::Unnamed(FieldsUnnamed {
+            paren_token: Paren {
+                span: Span::call_site(),
+            },
+            unnamed: Punctuated::from_iter(variant.values.iter().cloned().map(|path| Field {
+                attrs: vec![],
+                vis: Visibility::Inherited,
+                ident: None,
+                colon_token: None,
+                ty: Type::Path(TypePath { qself: None, path }),
+            })),
+        }),
+        discriminant: None,
+    });
     quote! {
         enum #name {
             #(#variants,)*
         }
+
+    #(#subs)*
     }
 }

@@ -7,8 +7,15 @@ fn main() {
 }
 
 cli! {
-    "f0" > f32,
+    "f0" > f32 > f32,
     "log" > {
+        "adc" > "log3" > {
+            "adc" > f32,
+            "vtg"
+        },
+        "vtg"
+    },
+    "log2" > {
         "adc",
         "vtg"
     }
